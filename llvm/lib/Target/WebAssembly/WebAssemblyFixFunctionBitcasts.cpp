@@ -71,10 +71,6 @@ static void findUses(Value *V, Function &F,
     else if (auto *A = dyn_cast<GlobalAlias>(U))
       findUses(A, F, Uses);
     else if (auto *CB = dyn_cast<CallBase>(U)) {
-      Value *Callee = CB->getCalledOperand();
-      if (Callee != V)
-        // Skip calls where the function isn't the callee
-        continue;
       if (CB->getFunctionType() == F.getValueType())
         // Skip uses that are immediately called
         continue;
@@ -233,6 +229,7 @@ bool FixFunctionBitcasts::runOnModule(Module &M) {
   Function *Main = nullptr;
   CallInst *CallMain = nullptr;
   SmallVector<std::pair<CallBase *, Function *>, 0> Uses;
+  SmallVector<CallBase *, 8> IndirectCalls;
 
   // Collect all the places that need wrappers.
   for (Function &F : M) {
@@ -241,6 +238,15 @@ bool FixFunctionBitcasts::runOnModule(Module &M) {
     if (F.getCallingConv() == CallingConv::Swift)
       continue;
     findUses(&F, F, Uses);
+
+    // Iterate over the instructions to find all indirect call instructions.
+    for (BasicBlock &BB : F) {
+      for (Instruction &I : BB) {
+        auto *CB = dyn_cast<CallBase>(&I);
+        if (CB && CB->isIndirectCall())
+          IndirectCalls.push_back(CB);
+      }
+    }
 
     // If we have a "main" function, and its type isn't
     // "int main(int argc, char *argv[])", create an artificial call with it
@@ -268,7 +274,43 @@ bool FixFunctionBitcasts::runOnModule(Module &M) {
   for (auto &UseFunc : Uses) {
     CallBase *CB = UseFunc.first;
     Function *F = UseFunc.second;
-    FunctionType *Ty = CB->getFunctionType();
+    FunctionType *Ty = nullptr;
+
+    Value *Callee = CB->getCalledOperand();
+    if (Callee == F) {
+      Ty = CB->getFunctionType();
+    } else {
+      for (CallBase *ICB : IndirectCalls) {
+        auto *L = dyn_cast<LoadInst>(ICB->getCalledOperand());
+        if (!L || !L->hasOneUse())
+          continue;
+
+        auto *A = dyn_cast<AllocaInst>(L->getPointerOperand());
+        if (!A)
+          continue;
+
+        for (User *U : A->users()) {
+          auto *S = dyn_cast<StoreInst>(U);
+          if (!S)
+            continue;
+
+          auto *Arg = dyn_cast<Argument>(S->getValueOperand());
+          if (!Arg)
+            continue;
+
+          if (Arg->getParent() != Callee)
+            // Skip indirect calls where the parent isn't the callee.
+            // FIXME: This is quite fragile and doesn't cover all cases.
+            continue;
+
+          Ty = ICB->getFunctionType();
+          break;
+        }
+      }
+
+      if (!Ty)
+        continue;
+    }
 
     auto Pair = Wrappers.try_emplace(std::make_pair(F, Ty));
     if (Pair.second)
@@ -278,7 +320,15 @@ bool FixFunctionBitcasts::runOnModule(Module &M) {
     if (!Wrapper)
       continue;
 
-    CB->setCalledOperand(Wrapper);
+    if (Callee == F) {
+      // Change the target of the call to the wrapper function.
+      CB->setCalledOperand(Wrapper);
+    } else {
+      // Change any function pointers to the wrapper function.
+      for (unsigned i = 0; i < CB->arg_size(); ++i)
+        if (CB->getArgOperand(i) == F)
+          CB->setArgOperand(i, Wrapper);
+    }
   }
 
   // If we created a wrapper for main, rename the wrapper so that it's the
