@@ -99,7 +99,7 @@ public:
       QualType DstType) const override {
     llvm::Module &M = CGF.CGM.getModule();
 
-    // Get the signatures
+    // Get the signatures.
     const FunctionProtoType *DstProtoType = DstType->getAs<PointerType>()
                                                 ->getPointeeType()
                                                 ->getAs<FunctionProtoType>();
@@ -107,51 +107,92 @@ public:
                                                 ->getPointeeType()
                                                 ->getAs<FunctionProtoType>();
 
-    // This should only work for different number of arguments
-    if (DstProtoType->getNumParams() == SrcProtoType->getNumParams() &&
-        DstProtoType->isVariadic() == SrcProtoType->isVariadic())
-      return nullptr;
-
-    // Get the llvm function types
+    // Get the llvm function types.
     llvm::FunctionType *DstFunctionType = llvm::cast<llvm::FunctionType>(
         CGF.ConvertType(QualType(DstProtoType, 0)));
     llvm::FunctionType *SrcFunctionType = llvm::cast<llvm::FunctionType>(
         CGF.ConvertType(QualType(SrcProtoType, 0)));
 
-    // Construct the Thunk function with the Target (destination) signature
+    // Construct the thunk function with the target (destination) signature.
     std::string ThunkName = getThunkName(OriginalFnPtr->getName().str(),
                                          DstProtoType, CGF.CGM.getContext());
     llvm::Function *Thunk = llvm::Function::Create(
         DstFunctionType, llvm::Function::InternalLinkage, ThunkName, M);
 
-    // Build the thunk body
-    llvm::IRBuilder<> Builder(
-        llvm::BasicBlock::Create(M.getContext(), "entry", Thunk));
+    // Build the thunk body.
+    llvm::BasicBlock *BB =
+        llvm::BasicBlock::Create(M.getContext(), "entry", Thunk);
+    const llvm::DataLayout &DL = BB->getDataLayout();
 
-    // Gather the arguments for calling the original function
-    std::vector<llvm::Value *> CallArgs;
-    unsigned CallN = SrcProtoType->getNumParams();
+    llvm::IRBuilder<> Builder(BB);
 
-    auto ArgIt = Thunk->arg_begin();
-    for (unsigned i = 0; i < CallN && ArgIt != Thunk->arg_end(); ++i, ++ArgIt) {
-      llvm::Value *A = &*ArgIt;
-      CallArgs.push_back(A);
+    // Determine what arguments to pass.
+    SmallVector<llvm::Value *, 4> Args;
+    llvm::Function::arg_iterator AI = Thunk->arg_begin();
+    llvm::Function::arg_iterator AE = Thunk->arg_end();
+    llvm::FunctionType::param_iterator PI = SrcFunctionType->param_begin();
+    llvm::FunctionType::param_iterator PE = SrcFunctionType->param_end();
+    bool TypeMismatch = false;
+    bool ThunkNeeded = false;
+
+    llvm::Type *ExpectedRtnType = SrcFunctionType->getReturnType();
+    llvm::Type *RtnType = DstFunctionType->getReturnType();
+
+    if ((SrcFunctionType->getNumParams() != DstFunctionType->getNumParams()) ||
+        (SrcFunctionType->isVarArg() != DstFunctionType->isVarArg()) ||
+        (ExpectedRtnType != RtnType))
+      ThunkNeeded = true;
+
+    for (; AI != AE && PI != PE; ++AI, ++PI) {
+      llvm::Type *ArgType = AI->getType();
+      llvm::Type *ParamType = *PI;
+
+      if (ArgType == ParamType) {
+        Args.push_back(&*AI);
+      } else {
+        if (llvm::CastInst::isBitOrNoopPointerCastable(ArgType, ParamType,
+                                                       DL)) {
+          llvm::Value *PtrCast =
+              Builder.CreateBitOrPointerCast(AI, ParamType, "cast");
+          Args.push_back(PtrCast);
+        } else {
+          TypeMismatch = true;
+          break;
+        }
+      }
     }
 
-    // Create the call to the original function pointer
-    llvm::CallInst *Call =
-        Builder.CreateCall(SrcFunctionType, OriginalFnPtr, CallArgs);
+    if (ThunkNeeded && !TypeMismatch) {
+      for (; PI != PE; ++PI)
+        Args.push_back(llvm::PoisonValue::get(*PI));
+      if (SrcFunctionType->isVarArg())
+        for (; AI != AE; ++AI)
+          Args.push_back(&*AI);
 
-    // Handle return type
-    llvm::Type *ThunkRetTy = DstFunctionType->getReturnType();
+      // Create the call to the original function pointer.
+      llvm::CallInst *Call =
+          Builder.CreateCall(SrcFunctionType, OriginalFnPtr, Args);
 
-    if (ThunkRetTy->isVoidTy()) {
-      Builder.CreateRetVoid();
-    } else {
-      llvm::Value *Ret = Call;
-      if (Ret->getType() != ThunkRetTy)
-        Ret = Builder.CreateBitCast(Ret, ThunkRetTy);
-      Builder.CreateRet(Ret);
+      // Determine what value to return.
+      if (RtnType->isVoidTy()) {
+        Builder.CreateRetVoid();
+      } else if (ExpectedRtnType->isVoidTy()) {
+        Builder.CreateRet(llvm::PoisonValue::get(RtnType));
+      } else if (RtnType == ExpectedRtnType) {
+        Builder.CreateRet(Call);
+      } else if (llvm::CastInst::isBitOrNoopPointerCastable(ExpectedRtnType,
+                                                            RtnType, DL)) {
+        llvm::Value *Cast =
+            Builder.CreateBitOrPointerCast(Call, RtnType, "cast");
+        Builder.CreateRet(Cast);
+      } else {
+        TypeMismatch = true;
+      }
+    }
+
+    if (!ThunkNeeded || TypeMismatch) {
+      Thunk->eraseFromParent();
+      return nullptr;
     }
     return Thunk;
   }
