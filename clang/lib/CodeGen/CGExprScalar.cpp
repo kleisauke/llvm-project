@@ -2484,7 +2484,7 @@ Value *ScalarExprEmitter::VisitCastExpr(CastExpr *CE) {
       if (SourceTy->isFunctionPointerType() && DestTy->isFunctionPointerType()) {
         llvm::Function *Thunk = CGF.CGM.getTargetCodeGenInfo().getOrCreateWasmFunctionPointerThunk(
               CGF, Src, SourceTy, DestTy);
-        return Thunk;
+        if (Thunk) return Thunk;
       }
     }
 

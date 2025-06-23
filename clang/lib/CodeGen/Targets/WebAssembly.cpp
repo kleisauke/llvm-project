@@ -105,6 +105,10 @@ public:
     const FunctionProtoType *DstProtoType = DstType->getAs<PointerType>()->getPointeeType()->getAs<FunctionProtoType>();
     const FunctionProtoType *SrcProtoType = SrcType->getAs<PointerType>()->getPointeeType()->getAs<FunctionProtoType>();
 
+    // This should only work for different number of arguments
+    if (DstProtoType->getNumParams() == SrcProtoType->getNumParams())
+      return nullptr;
+
     // Get the llvm function types
     llvm::FunctionType *DstFunctionType = llvm::cast<llvm::FunctionType>(CGF.ConvertType(QualType(DstProtoType, 0)));
     llvm::FunctionType *SrcFunctionType = llvm::cast<llvm::FunctionType>(CGF.ConvertType(QualType(SrcProtoType, 0)));
