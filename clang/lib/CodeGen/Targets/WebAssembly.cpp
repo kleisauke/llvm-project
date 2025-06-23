@@ -133,15 +133,15 @@ public:
   virtual llvm::Function *getOrCreateWasmFunctionPointerThunk(
       CodeGenModule &CGM, llvm::Value *OriginalFnPtr, QualType SrcType,
       QualType DstType) const override {
-
     // Get the signatures
     const FunctionProtoType *SrcProtoType = SrcType->getAs<FunctionProtoType>();
     const FunctionProtoType *DstProtoType = DstType->getAs<PointerType>()
                                                 ->getPointeeType()
                                                 ->getAs<FunctionProtoType>();
 
-    // This should only work for different number of arguments
-    if (DstProtoType->getNumParams() <= SrcProtoType->getNumParams())
+    // Skip thunk generation if function types are already compatible
+    if (SrcProtoType->getNumParams() > DstProtoType->getNumParams() &&
+        SrcProtoType->isVariadic() == DstProtoType->isVariadic())
       return nullptr;
 
     // Get the llvm function types
@@ -150,7 +150,7 @@ public:
     llvm::FunctionType *SrcFunctionType = llvm::cast<llvm::FunctionType>(
         CGM.getTypes().ConvertType(QualType(SrcProtoType, 0)));
 
-    // Construct the Thunk function with the Target (destination) signature
+    // Construct the thunk function with the target (destination) signature
     std::string ThunkName = getThunkName(OriginalFnPtr->getName().str(),
                                          DstProtoType, CGM.getContext());
     // Check if we already have a thunk for this function
@@ -171,31 +171,38 @@ public:
     llvm::IRBuilder<> Builder(
         llvm::BasicBlock::Create(M.getContext(), "entry", Thunk));
 
-    // Gather the arguments for calling the original function
-    std::vector<llvm::Value *> CallArgs;
-    unsigned CallN = SrcProtoType->getNumParams();
+    // Determine what arguments to pass
+    SmallVector<llvm::Value *, 4> Args;
+    llvm::Function::arg_iterator AI = Thunk->arg_begin();
+    llvm::Function::arg_iterator AE = Thunk->arg_end();
+    llvm::FunctionType::param_iterator PI = SrcFunctionType->param_begin();
+    llvm::FunctionType::param_iterator PE = SrcFunctionType->param_end();
 
-    auto ArgIt = Thunk->arg_begin();
-    for (unsigned i = 0; i < CallN && ArgIt != Thunk->arg_end(); ++i, ++ArgIt) {
-      llvm::Value *A = &*ArgIt;
-      CallArgs.push_back(A);
-    }
+    for (; AI != AE && PI != PE; ++AI, ++PI)
+      Args.push_back(Builder.CreateAggregateCast(AI, *PI));
+
+    for (; PI != PE; ++PI)
+      Args.push_back(llvm::PoisonValue::get(*PI));
+    if (SrcFunctionType->isVarArg())
+      for (; AI != AE; ++AI)
+        Args.push_back(&*AI);
 
     // Create the call to the original function pointer
     llvm::CallInst *Call =
-        Builder.CreateCall(SrcFunctionType, OriginalFnPtr, CallArgs);
+        Builder.CreateCall(SrcFunctionType, OriginalFnPtr, Args);
 
-    // Handle return type
-    llvm::Type *ThunkRetTy = DstFunctionType->getReturnType();
+    llvm::Type *ExpectedRtnType = SrcFunctionType->getReturnType();
+    llvm::Type *RtnType = DstFunctionType->getReturnType();
 
-    if (ThunkRetTy->isVoidTy()) {
+    // Determine what value to return
+    if (RtnType->isVoidTy()) {
       Builder.CreateRetVoid();
+    } else if (ExpectedRtnType->isVoidTy()) {
+      Builder.CreateRet(llvm::PoisonValue::get(RtnType));
     } else {
-      llvm::Value *Ret = Call;
-      if (Ret->getType() != ThunkRetTy)
-        Ret = Builder.CreateBitCast(Ret, ThunkRetTy);
-      Builder.CreateRet(Ret);
+      Builder.CreateRet(Builder.CreateAggregateCast(Call, RtnType));
     }
+
     LLVM_DEBUG(llvm::dbgs() << "getOrCreateWasmFunctionPointerThunk:"
                             << " from " << OriginalFnPtr->getName().str()
                             << " to " << ThunkName << "\n");
