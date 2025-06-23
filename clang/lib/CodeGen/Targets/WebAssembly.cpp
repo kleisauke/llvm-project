@@ -10,7 +10,6 @@
 #include "TargetInfo.h"
 
 #include "clang/AST/ParentMapContext.h"
-#include <sstream>
 
 using namespace clang;
 using namespace clang::CodeGen;
@@ -130,7 +129,6 @@ public:
   virtual llvm::Function *getOrCreateWasmFunctionPointerThunk(
       CodeGenModule &CGM, llvm::Value *OriginalFnPtr, QualType SrcType,
       QualType DstType) const override {
-
     // Get the signatures
     const FunctionProtoType *SrcProtoType = SrcType->getAs<FunctionProtoType>();
     const FunctionProtoType *DstProtoType = DstType->getAs<PointerType>()
@@ -138,7 +136,8 @@ public:
                                                 ->getAs<FunctionProtoType>();
 
     // This should only work for different number of arguments
-    if (DstProtoType->getNumParams() <= SrcProtoType->getNumParams())
+    if (DstProtoType->getNumParams() == SrcProtoType->getNumParams() &&
+        DstProtoType->isVariadic() == SrcProtoType->isVariadic())
       return nullptr;
 
     // Get the llvm function types
@@ -187,12 +186,11 @@ public:
   }
 
 private:
-  // Build the thunk name: "%s_{type1}_{type2}_..."
+  // Build the thunk name: "%s_{OrigName}_{WasmSig}"
   std::string getThunkName(std::string OrigName,
                            const FunctionProtoType *DstProto,
                            const ASTContext &Ctx) const;
-  std::string sanitizeTypeString(const std::string &typeStr) const;
-  std::string getTypeName(const QualType &qt, const ASTContext &Ctx) const;
+  char getTypeSig(const QualType &Ty, const ASTContext &Ctx) const;
   const DeclRefExpr *findDeclRefExpr(const Expr *E) const;
   const DeclRefExpr *findDeclRefExprForVarDown(const Stmt *Parent,
                                                const VarDecl *V,
@@ -279,43 +277,47 @@ CodeGen::createWebAssemblyTargetCodeGenInfo(CodeGenModule &CGM,
   return std::make_unique<WebAssemblyTargetCodeGenInfo>(CGM.getTypes(), K);
 }
 
-// Helper to sanitize type name string for use in function name
-std::string WebAssemblyTargetCodeGenInfo::sanitizeTypeString(
-    const std::string &typeStr) const {
-  std::string s;
-  for (char c : typeStr) {
-    if (isalnum(c))
-      s += c;
-    else if (c == ' ')
-      s += '_';
-    else
-      s += '_';
+// Returns a character that represents the given QualType in a wasm signature.
+// See getInvokeSig() in WebAssemblyAsmPrinter for related logic.
+char WebAssemblyTargetCodeGenInfo::getTypeSig(const QualType &Ty,
+                                              const ASTContext &Ctx) const {
+  if (Ty->isAnyPointerType()) {
+    return Ctx.getTypeSize(Ctx.VoidPtrTy) == 32 ? 'i' : 'j';
   }
-  return s;
-}
+  if (Ty->isIntegerType()) {
+    return Ctx.getTypeSize(Ty) <= 32 ? 'i' : 'j';
+  }
+  if (Ty->isFloatingType()) {
+    return Ctx.getTypeSize(Ty) <= 32 ? 'f' : 'd';
+  }
+  if (Ty->isVectorType()) {
+    return 'V';
+  }
+  if (Ty->isWebAssemblyTableType()) {
+    return 'F';
+  }
+  if (Ty->isWebAssemblyExternrefType()) {
+    return 'X';
+  }
 
-// Helper to generate the type string from QualType
-std::string
-WebAssemblyTargetCodeGenInfo::getTypeName(const QualType &qt,
-                                          const ASTContext &Ctx) const {
-  PrintingPolicy Policy(Ctx.getLangOpts());
-  Policy.SuppressTagKeyword = true;
-  Policy.SuppressScope = true;
-  Policy.AnonymousTagLocations = false;
-  std::string typeStr = qt.getAsString(Policy);
-  return sanitizeTypeString(typeStr);
+  llvm_unreachable("Unhandled QualType");
 }
 
 std::string
 WebAssemblyTargetCodeGenInfo::getThunkName(std::string OrigName,
                                            const FunctionProtoType *DstProto,
                                            const ASTContext &Ctx) const {
-  std::ostringstream oss;
-  oss << "__" << OrigName;
-  for (unsigned i = 0; i < DstProto->getNumParams(); ++i) {
-    oss << "_" << getTypeName(DstProto->getParamType(i), Ctx);
+  std::string ThunkName = "__" + OrigName + "_";
+  QualType RetTy = DstProto->getReturnType();
+  if (RetTy->isVoidType()) {
+    ThunkName += 'v';
+  } else {
+    ThunkName += getTypeSig(RetTy, Ctx);
   }
-  return oss.str();
+  for (unsigned i = 0; i < DstProto->getNumParams(); ++i) {
+    ThunkName += getTypeSig(DstProto->getParamType(i), Ctx);
+  }
+  return ThunkName;
 }
 
 /// Recursively find the first DeclRefExpr in an Expr subtree.
