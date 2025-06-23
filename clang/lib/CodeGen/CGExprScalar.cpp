@@ -2481,10 +2481,13 @@ Value *ScalarExprEmitter::VisitCastExpr(CastExpr *CE) {
     // (WebAssemblyFixFunctionBitcast) anymore
     if (CGF.CGM.getTriple().isWasm()) {
       QualType SourceTy = E->getType();
-      if (SourceTy->isFunctionPointerType() && DestTy->isFunctionPointerType()) {
-        llvm::Function *Thunk = CGF.CGM.getTargetCodeGenInfo().getOrCreateWasmFunctionPointerThunk(
-              CGF, Src, SourceTy, DestTy);
-        if (Thunk) return Thunk;
+      if (SourceTy->isFunctionPointerType() &&
+          DestTy->isFunctionPointerType()) {
+        llvm::Function *Thunk =
+            CGF.CGM.getTargetCodeGenInfo().getOrCreateWasmFunctionPointerThunk(
+                CGF, Src, SourceTy, DestTy);
+        if (Thunk)
+          return Thunk;
       }
     }
 

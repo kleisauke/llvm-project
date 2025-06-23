@@ -96,33 +96,42 @@ public:
     return llvm::Type::getWasm_FuncrefTy(getABIInfo().getVMContext());
   }
 
-  llvm::Function * getOrCreateWasmFunctionPointerThunk(CodeGenFunction &CGF,
-    llvm::Value *OriginalFnPtr, QualType SrcType, QualType DstType) const override {
+  llvm::Function *getOrCreateWasmFunctionPointerThunk(
+      CodeGenFunction &CGF, llvm::Value *OriginalFnPtr, QualType SrcType,
+      QualType DstType) const override {
 
     llvm::Module &M = CGF.CGM.getModule();
 
     // Get the signatures
-    const FunctionProtoType *DstProtoType = DstType->getAs<PointerType>()->getPointeeType()->getAs<FunctionProtoType>();
-    const FunctionProtoType *SrcProtoType = SrcType->getAs<PointerType>()->getPointeeType()->getAs<FunctionProtoType>();
+    const FunctionProtoType *DstProtoType = DstType->getAs<PointerType>()
+                                                ->getPointeeType()
+                                                ->getAs<FunctionProtoType>();
+    const FunctionProtoType *SrcProtoType = SrcType->getAs<PointerType>()
+                                                ->getPointeeType()
+                                                ->getAs<FunctionProtoType>();
 
     // This should only work for different number of arguments
     if (DstProtoType->getNumParams() == SrcProtoType->getNumParams())
       return nullptr;
 
     // Get the llvm function types
-    llvm::FunctionType *DstFunctionType = llvm::cast<llvm::FunctionType>(CGF.ConvertType(QualType(DstProtoType, 0)));
-    llvm::FunctionType *SrcFunctionType = llvm::cast<llvm::FunctionType>(CGF.ConvertType(QualType(SrcProtoType, 0)));
+    llvm::FunctionType *DstFunctionType = llvm::cast<llvm::FunctionType>(
+        CGF.ConvertType(QualType(DstProtoType, 0)));
+    llvm::FunctionType *SrcFunctionType = llvm::cast<llvm::FunctionType>(
+        CGF.ConvertType(QualType(SrcProtoType, 0)));
 
     // Construct the Thunk function with the Target (destination) signature
-    std::string ThunkName = getThunkName(OriginalFnPtr->getName().str(), DstProtoType, CGF.CGM.getContext());
+    std::string ThunkName = getThunkName(OriginalFnPtr->getName().str(),
+                                         DstProtoType, CGF.CGM.getContext());
     llvm::Function *Thunk = llvm::Function::Create(
         DstFunctionType, llvm::Function::InternalLinkage, ThunkName, M);
 
     // Build the thunk body
-    llvm::IRBuilder<> Builder(llvm::BasicBlock::Create(M.getContext(), "entry", Thunk));
+    llvm::IRBuilder<> Builder(
+        llvm::BasicBlock::Create(M.getContext(), "entry", Thunk));
 
     // Gather the arguments for calling the original function
-    std::vector<llvm::Value*> CallArgs;
+    std::vector<llvm::Value *> CallArgs;
     unsigned CallN = SrcProtoType->getNumParams();
 
     auto ArgIt = Thunk->arg_begin();
@@ -132,7 +141,8 @@ public:
     }
 
     // Create the call to the original function pointer
-    llvm::CallInst *Call = Builder.CreateCall(SrcFunctionType, OriginalFnPtr, CallArgs);
+    llvm::CallInst *Call =
+        Builder.CreateCall(SrcFunctionType, OriginalFnPtr, CallArgs);
 
     // Handle return type
     llvm::Type *ThunkRetTy = DstFunctionType->getReturnType();
@@ -150,9 +160,11 @@ public:
 
 private:
   // Build the thunk name: "%s_{type1}_{type2}_..."
-  std::string getThunkName(std::string OrigName, const FunctionProtoType *DstProto, const ASTContext &Ctx) const;
+  std::string getThunkName(std::string OrigName,
+                           const FunctionProtoType *DstProto,
+                           const ASTContext &Ctx) const;
   std::string sanitizeTypeString(const std::string &typeStr) const;
-  std::string getTypeName(const QualType& qt, const ASTContext &Ctx) const;
+  std::string getTypeName(const QualType &qt, const ASTContext &Ctx) const;
 };
 
 /// Classify argument of given type \p Ty.
@@ -234,31 +246,40 @@ CodeGen::createWebAssemblyTargetCodeGenInfo(CodeGenModule &CGM,
 }
 
 // Helper to sanitize type name string for use in function name
-std::string WebAssemblyTargetCodeGenInfo::sanitizeTypeString(const std::string &typeStr) const {
-    std::string s;
-    for (char c : typeStr) {
-        if (isalnum(c)) s += c;
-        else if (c == ' ') s += '_';
-        else s += '_';
-    }
-    return s;
+std::string WebAssemblyTargetCodeGenInfo::sanitizeTypeString(
+    const std::string &typeStr) const {
+  std::string s;
+  for (char c : typeStr) {
+    if (isalnum(c))
+      s += c;
+    else if (c == ' ')
+      s += '_';
+    else
+      s += '_';
+  }
+  return s;
 }
 
 // Helper to generate the type string from QualType
-std::string WebAssemblyTargetCodeGenInfo::getTypeName(const QualType& qt, const ASTContext &Ctx) const {
-    PrintingPolicy Policy(Ctx.getLangOpts());
-    Policy.SuppressTagKeyword = true;
-    Policy.SuppressScope = true;
-    Policy.AnonymousTagLocations = false;
-    std::string typeStr = qt.getAsString(Policy);
-    return sanitizeTypeString(typeStr);
+std::string
+WebAssemblyTargetCodeGenInfo::getTypeName(const QualType &qt,
+                                          const ASTContext &Ctx) const {
+  PrintingPolicy Policy(Ctx.getLangOpts());
+  Policy.SuppressTagKeyword = true;
+  Policy.SuppressScope = true;
+  Policy.AnonymousTagLocations = false;
+  std::string typeStr = qt.getAsString(Policy);
+  return sanitizeTypeString(typeStr);
 }
 
-std::string WebAssemblyTargetCodeGenInfo::getThunkName(std::string OrigName, const FunctionProtoType *DstProto, const ASTContext &Ctx) const {
+std::string
+WebAssemblyTargetCodeGenInfo::getThunkName(std::string OrigName,
+                                           const FunctionProtoType *DstProto,
+                                           const ASTContext &Ctx) const {
   std::ostringstream oss;
   oss << "__" << OrigName;
   for (unsigned i = 0; i < DstProto->getNumParams(); ++i) {
-      oss << "_" << getTypeName(DstProto->getParamType(i), Ctx);
+    oss << "_" << getTypeName(DstProto->getParamType(i), Ctx);
   }
   return oss.str();
 }
