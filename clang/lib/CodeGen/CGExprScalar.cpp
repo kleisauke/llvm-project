@@ -2475,6 +2475,19 @@ Value *ScalarExprEmitter::VisitCastExpr(CastExpr *CE) {
       }
     }
 
+    // For WebAssembly target we need to create thunk functions
+    // to properly handle function pointers with a different signature.
+    // Due to opaque pointers, this can not be handled in LLVM
+    // (WebAssemblyFixFunctionBitcast) anymore
+    if (CGF.CGM.getTriple().isWasm()) {
+      QualType SourceTy = E->getType();
+      if (SourceTy->isFunctionPointerType() && DestTy->isFunctionPointerType()) {
+        llvm::Function *Thunk = CGF.CGM.getTargetCodeGenInfo().getOrCreateWasmFunctionPointerThunk(
+              CGF, Src, SourceTy, DestTy);
+        return Thunk;
+      }
+    }
+
     if (CGF.CGM.getCodeGenOpts().StrictVTablePointers) {
       const QualType SrcType = E->getType();
 
