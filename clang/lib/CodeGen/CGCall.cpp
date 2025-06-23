@@ -4915,10 +4915,13 @@ void CodeGenFunction::EmitCallArg(CallArgList &args, const Expr *E,
   // Due to opaque pointers, this can not be handled in LLVM
   // (WebAssemblyFixFunctionBitcast) anymore
   if (CGM.getTriple().isWasm() && type->isFunctionPointerType()) {
-    if (const DeclRefExpr *DRE = CGM.getTargetCodeGenInfo().getWasmFunctionDeclRefExpr(E, CGM.getContext())) {
+    if (const DeclRefExpr *DRE =
+            CGM.getTargetCodeGenInfo().getWasmFunctionDeclRefExpr(
+                E, CGM.getContext())) {
       llvm::Value *V = EmitLValue(DRE).getPointer(*this);
-      llvm::Function *Thunk = CGM.getTargetCodeGenInfo().getOrCreateWasmFunctionPointerThunk(
-            CGM, V, DRE->getDecl()->getType(), type);
+      llvm::Function *Thunk =
+          CGM.getTargetCodeGenInfo().getOrCreateWasmFunctionPointerThunk(
+              CGM, V, DRE->getDecl()->getType(), type);
       if (Thunk) {
         RValue R = RValue::get(Thunk);
         args.add(R, type);
