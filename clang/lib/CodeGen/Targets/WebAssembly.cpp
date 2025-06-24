@@ -97,6 +97,11 @@ public:
   llvm::Function *getOrCreateWasmFunctionPointerThunk(
       CodeGenFunction &CGF, llvm::Value *OriginalFnPtr, QualType SrcType,
       QualType DstType) const override {
+    // Only generate thunks for constant function pointers.
+    if (!isa<llvm::Constant>(OriginalFnPtr)) {
+      return nullptr;
+    }
+
     llvm::Module &M = CGF.CGM.getModule();
 
     // Get the signatures.
