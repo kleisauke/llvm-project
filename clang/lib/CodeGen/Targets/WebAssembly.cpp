@@ -12,6 +12,9 @@
 using namespace clang;
 using namespace clang::CodeGen;
 
+// This counter is used to generate unique thunk names.
+static uint64_t wasmThunkCounter = 0;
+
 //===----------------------------------------------------------------------===//
 // WebAssembly ABI Implementation
 //
@@ -171,7 +174,7 @@ public:
   }
 
 private:
-  // Build the thunk name: "%s_{OrigName}_{WasmSig}"
+  // Build the thunk name: "__{OrigName}_{WasmSig}.0"
   std::string getThunkName(std::string OrigName,
                            const FunctionProtoType *DstProto,
                            const ASTContext &Ctx) const;
@@ -296,5 +299,6 @@ WebAssemblyTargetCodeGenInfo::getThunkName(std::string OrigName,
   for (unsigned i = 0; i < DstProto->getNumParams(); ++i) {
     ThunkName += getTypeSig(DstProto->getParamType(i), Ctx);
   }
+  ThunkName += "." + std::to_string(wasmThunkCounter++);
   return ThunkName;
 }
