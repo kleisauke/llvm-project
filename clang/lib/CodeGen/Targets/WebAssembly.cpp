@@ -97,8 +97,6 @@ public:
     return llvm::Type::getWasm_FuncrefTy(getABIInfo().getVMContext());
   }
 
-#define DEBUG_TYPE "webassembly"
-
   llvm::Function *getOrCreateWasmFunctionPointerThunk(
       CodeGenFunction &CGF, llvm::Value *OriginalFnPtr, QualType SrcType,
       QualType DstType) const override {
@@ -172,8 +170,8 @@ public:
       Builder.CreateRet(Builder.CreateAggregateCast(Call, RtnType));
     }
 
-    LLVM_DEBUG(llvm::dbgs() << *OriginalFnPtr << "\n");
-    LLVM_DEBUG(llvm::dbgs() << *Thunk << "\n");
+    OriginalFnPtr->dump();
+    Thunk->dump();
 
     return Thunk;
   }
