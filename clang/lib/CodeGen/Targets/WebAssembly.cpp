@@ -199,6 +199,9 @@ public:
       Builder.CreateRet(Builder.CreateAggregateCast(Call, RtnType));
     }
 
+    OriginalFnPtr->dump();
+    Thunk->dump();
+
     return Thunk;
   }
 
