@@ -14,8 +14,6 @@
 using namespace clang;
 using namespace clang::CodeGen;
 
-#define DEBUG_TYPE "clang-target-wasm"
-
 // This counter is used to generate unique thunk names.
 static uint64_t wasmThunkCounter = 0;
 
@@ -196,9 +194,9 @@ public:
       Builder.CreateRet(Builder.CreateAggregateCast(Call, RtnType));
     }
 
-    LLVM_DEBUG(llvm::dbgs() << "getOrCreateWasmFunctionPointerThunk:"
-                            << " from " << OriginalFnPtr->getName().str()
-                            << " to " << ThunkName << "\n");
+    OriginalFnPtr->dump();
+    Thunk->dump();
+
     return Thunk;
   }
 
