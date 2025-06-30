@@ -132,11 +132,6 @@ public:
   virtual llvm::Function *getOrCreateWasmFunctionPointerThunk(
       CodeGenModule &CGM, llvm::Value *OriginalFnPtr, QualType SrcType,
       QualType DstType) const override {
-    // Only generate thunks for constant function pointers.
-    if (!isa<llvm::Constant>(OriginalFnPtr)) {
-      return nullptr;
-    }
-
     // Get the signatures.
     const FunctionProtoType *SrcProtoType = SrcType->getAs<FunctionProtoType>();
     const FunctionProtoType *DstProtoType = DstType->getAs<PointerType>()
