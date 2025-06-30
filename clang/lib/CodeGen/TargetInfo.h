@@ -421,7 +421,9 @@ public:
   /// Return the WebAssembly funcref reference type.
   virtual llvm::Type *getWasmFuncrefReferenceType() const { return nullptr; }
 
-  virtual llvm::Function * getOrCreateWasmFunctionPointerThunk(CodeGenFunction &CGF,
+  virtual const DeclRefExpr * getWasmFunctionDeclRefExpr(const Expr *E, ASTContext &Ctx) const { return nullptr; }
+
+  virtual llvm::Function * getOrCreateWasmFunctionPointerThunk(CodeGenModule &CGM,
     llvm::Value *OriginalFnPtr, QualType SrcType, QualType DstType) const { return nullptr; }
 
   /// Emit the device-side copy of the builtin surface type.
