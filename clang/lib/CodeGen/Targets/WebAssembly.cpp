@@ -150,8 +150,7 @@ public:
 
     // Skip thunk generation if function types are already compatible
     if (SrcFunctionType->getNumParams() >= DstFunctionType->getNumParams() &&
-        SrcFunctionType->isVarArg() == DstFunctionType->isVarArg() &&
-        ExpectedRtnType == RtnType) {
+        SrcFunctionType->isVarArg() == DstFunctionType->isVarArg()) {
       return nullptr;
     }
 
