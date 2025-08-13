@@ -149,7 +149,7 @@ public:
     llvm::Type *RtnType = DstFunctionType->getReturnType();
 
     // Skip thunk generation if function types are already compatible
-    if (SrcFunctionType->getNumParams() == DstFunctionType->getNumParams() &&
+    if (SrcFunctionType->getNumParams() >= DstFunctionType->getNumParams() &&
         SrcFunctionType->isVarArg() == DstFunctionType->isVarArg() &&
         ExpectedRtnType == RtnType) {
       return nullptr;
