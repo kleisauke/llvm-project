@@ -2285,7 +2285,7 @@ ConstantLValueEmitter::tryEmitBase(const APValue::LValueBase &base) {
 
     if (const auto *FD = dyn_cast<FunctionDecl>(D)) {
       llvm::Constant *C = CGM.getRawFunctionPointer(FD);
-      // ForWebAssembly target we need to create thunk functions
+      // For WebAssembly target we need to create thunk functions
       // to properly handle function pointers args with a different signature
       // Due to opaque pointers, this can not be handled in LLVM
       // (WebAssemblyFixFunctionBitcast) anymore
