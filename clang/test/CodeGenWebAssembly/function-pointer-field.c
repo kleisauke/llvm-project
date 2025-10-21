@@ -15,7 +15,7 @@ typedef struct _StructWithFunctionPointer {
 int fp_less(int a) {
   return a;
 }
-                                                  
+
 // CHECK-LABEL: @test
 void test() {
   StructWithFunctionPointer sfp = {
