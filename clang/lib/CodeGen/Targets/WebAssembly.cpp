@@ -8,7 +8,6 @@
 
 #include "ABIInfoImpl.h"
 #include "TargetInfo.h"
-#include "llvm/ADT/StringMap.h"
 
 #include "clang/AST/ParentMapContext.h"
 
@@ -57,7 +56,6 @@ public:
       : TargetCodeGenInfo(std::make_unique<WebAssemblyABIInfo>(CGT, K)) {
     SwiftInfo =
         std::make_unique<SwiftABIInfo>(CGT, /*SwiftErrorInRegister=*/false);
-    ThunkCache = llvm::StringMap<llvm::Function *>();
   }
 
   void setTargetAttributes(const Decl *D, llvm::GlobalValue *GV,
@@ -153,16 +151,6 @@ public:
     // Construct the thunk function with the target (destination) signature
     std::string ThunkName = getThunkName(OriginalFnPtr->getName().str(),
                                          DstProtoType, CGM.getContext());
-    // Check if we already have a thunk for this function
-    if (auto It = ThunkCache.find(ThunkName); It != ThunkCache.end()) {
-      LLVM_DEBUG(llvm::dbgs() << "getOrCreateWasmFunctionPointerThunk: "
-                              << "found existing thunk for "
-                              << OriginalFnPtr->getName().str() << " as "
-                              << ThunkName << "\n");
-      return It->second;
-    }
-
-    // Create the thunk function
     llvm::Module &M = CGM.getModule();
     llvm::Function *Thunk = llvm::Function::Create(
         DstFunctionType, llvm::Function::InternalLinkage, ThunkName, M);
@@ -206,14 +194,10 @@ public:
     LLVM_DEBUG(llvm::dbgs() << "getOrCreateWasmFunctionPointerThunk:"
                             << " from " << OriginalFnPtr->getName().str()
                             << " to " << ThunkName << "\n");
-    // Cache the thunk
-    ThunkCache[ThunkName] = Thunk;
     return Thunk;
   }
 
 private:
-  // The thunk cache
-  mutable llvm::StringMap<llvm::Function *> ThunkCache;
   // Build the thunk name: "%s_{OrigName}_{WasmSig}"
   std::string getThunkName(std::string OrigName,
                            const FunctionProtoType *DstProto,
