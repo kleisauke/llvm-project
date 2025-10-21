@@ -297,7 +297,7 @@ CodeGen::createWebAssemblyTargetCodeGenInfo(CodeGenModule &CGM,
 // See getInvokeSig() in WebAssemblyAsmPrinter for related logic.
 char WebAssemblyTargetCodeGenInfo::getTypeSig(const QualType &Ty,
                                               const ASTContext &Ctx) const {
-  if (Ty->isAnyPointerType()) {
+  if (Ty->isCompoundType()) {
     return Ctx.getTypeSize(Ctx.VoidPtrTy) == 32 ? 'i' : 'j';
   }
   if (Ty->isIntegerType()) {
