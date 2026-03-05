@@ -372,17 +372,6 @@ If you don't get any reports, no action is required from you. Your changes are w
         return True
 
 
-def setup_llvmbot_git(git_dir="."):
-    """
-    Configure the git repo in `git_dir` with the llvmbot account so
-    commits are attributed to llvmbot.
-    """
-    repo = Repo(git_dir)
-    with repo.config_writer() as config:
-        config.set_value("user", "name", "llvmbot")
-        config.set_value("user", "email", "llvmbot@llvm.org")
-
-
 def extract_commit_hash(arg: str):
     """
     Extract the commit hash from the argument passed to /action github
@@ -414,20 +403,11 @@ class ReleaseWorkflow:
         token: str,
         repo: str,
         issue_number: int,
-        branch_repo_name: str,
-        branch_repo_token: str,
-        llvm_project_dir: str,
         requested_by: str,
     ) -> None:
         self._token = token
         self._repo_name = repo
         self._issue_number = issue_number
-        self._branch_repo_name = branch_repo_name
-        if branch_repo_token:
-            self._branch_repo_token = branch_repo_token
-        else:
-            self._branch_repo_token = self.token
-        self._llvm_project_dir = llvm_project_dir
         self._requested_by = requested_by
 
     @property
@@ -439,24 +419,12 @@ class ReleaseWorkflow:
         return self._repo_name
 
     @property
+    def repo_owner(self) -> str:
+        return self.repo_name.split("/")[0]
+
+    @property
     def issue_number(self) -> int:
         return self._issue_number
-
-    @property
-    def branch_repo_owner(self) -> str:
-        return self.branch_repo_name.split("/")[0]
-
-    @property
-    def branch_repo_name(self) -> str:
-        return self._branch_repo_name
-
-    @property
-    def branch_repo_token(self) -> str:
-        return self._branch_repo_token
-
-    @property
-    def llvm_project_dir(self) -> str:
-        return self._llvm_project_dir
 
     @property
     def requested_by(self) -> str:
@@ -474,9 +442,7 @@ class ReleaseWorkflow:
 
     @property
     def push_url(self) -> str:
-        return "https://{}@github.com/{}".format(
-            self.branch_repo_token, self.branch_repo_name
-        )
+        return "https://github.com/{}".format(self.repo_name)
 
     @property
     def branch_name(self) -> str:
@@ -588,11 +554,6 @@ class ReleaseWorkflow:
     def print_release_branch(self) -> None:
         print(self.release_branch_for_issue)
 
-    def issue_notify_branch(self) -> None:
-        self.issue.create_comment(
-            "/branch {}/{}".format(self.branch_repo_name, self.branch_name)
-        )
-
     def issue_notify_pull_request(self, pull: github.PullRequest.PullRequest) -> None:
         self.issue.create_comment(
             "/pull-request {}#{}".format(self.repo_name, pull.number)
@@ -686,7 +647,7 @@ class ReleaseWorkflow:
         This function attempts to backport `commits` into the branch associated
         with `self.issue_number`.
 
-        If this is successful, then the branch is pushed to `self.branch_repo_name`, if not,
+        If this is successful, then the branch is pushed to `self.repo_name`, if not,
         a comment is added to the issue saying that the cherry-pick failed.
 
         :param list commits: List of commits to cherry-pick.
@@ -694,7 +655,7 @@ class ReleaseWorkflow:
         """
         print("cherry-picking", commits)
         branch_name = self.branch_name
-        local_repo = Repo(self.llvm_project_dir)
+        local_repo = Repo(".")
         local_repo.git.checkout(self.release_branch_for_issue)
 
         for c in commits:
@@ -709,9 +670,7 @@ class ReleaseWorkflow:
         local_repo.git.push(push_url, "HEAD:{}".format(branch_name), force=True)
 
         self.issue_remove_cherry_pick_failed_label()
-        return self.create_pull_request(
-            self.branch_repo_owner, self.repo_name, branch_name, commits
-        )
+        return self.create_pull_request(branch_name, commits)
 
     def check_if_pull_request_exists(
         self, repo: github.Repository.Repository, head: str
@@ -720,12 +679,12 @@ class ReleaseWorkflow:
         return pulls.totalCount != 0
 
     def create_pull_request(
-        self, owner: str, repo_name: str, branch: str, commits: List[str]
+        self, branch: str, commits: List[str]
     ) -> bool:
         """
         Create a pull request in `self.repo_name`.  The base branch of the
-        pull request will be chosen based on the the milestone attached to
-        the issue represented by `self.issue_number`  For example if the milestone
+        pull request will be chosen based on the milestone attached to the
+        issue represented by `self.issue_number`  For example if the milestone
         is Release 13.0.1, then the base branch will be release/13.x. `branch`
         will be used as the compare branch.
         https://docs.github.com/en/get-started/quickstart/github-glossary#base-branch
@@ -734,13 +693,12 @@ class ReleaseWorkflow:
         repo = github.Github(auth=github.Auth.Token(self.token)).get_repo(
             self.repo_name
         )
-        issue_ref = "{}#{}".format(self.repo_name, self.issue_number)
         pull = None
         release_branch_for_issue = self.release_branch_for_issue
         if release_branch_for_issue is None:
             return False
 
-        head = f"{owner}:{branch}"
+        head = f"{self.repo_owner}:{branch}"
         if self.check_if_pull_request_exists(repo, head):
             print("PR already exists...")
             return True
@@ -811,7 +769,7 @@ def request_release_note(token: str, repo_name: str, pr_number: int):
     repo = github.Github(auth=github.Auth.Token(token)).get_repo(repo_name)
     pr = repo.get_issue(pr_number).as_pull_request()
     submitter = pr.user.login
-    if submitter == "llvmbot":
+    if submitter == "github-actions[bot]":
         m = re.search("Requested by: @(.+)$", pr.body)
         if not m:
             submitter = None
@@ -864,35 +822,13 @@ pr_buildbot_information_parser.add_argument("--author", type=str, required=True)
 
 release_workflow_parser = subparsers.add_parser("release-workflow")
 release_workflow_parser.add_argument(
-    "--llvm-project-dir",
-    type=str,
-    default=".",
-    help="directory containing the llvm-project checkout",
-)
-release_workflow_parser.add_argument(
     "--issue-number", type=int, required=True, help="The issue number to update"
-)
-release_workflow_parser.add_argument(
-    "--branch-repo-token",
-    type=str,
-    help="GitHub authentication token to use for the repository where new branches will be pushed. Defaults to TOKEN.",
-)
-release_workflow_parser.add_argument(
-    "--branch-repo",
-    type=str,
-    default="llvmbot/llvm-project",
-    help="The name of the repo where new branches will be pushed (e.g. llvm/llvm-project)",
 )
 release_workflow_parser.add_argument(
     "sub_command",
     type=str,
     choices=["print-release-branch", "auto"],
     help="Print to stdout the name of the release branch ISSUE_NUMBER should be backported to",
-)
-
-llvmbot_git_config_parser = subparsers.add_parser(
-    "setup-llvmbot-git",
-    help="Set the default user and email for the git repo in LLVM_PROJECT_DIR to llvmbot",
 )
 release_workflow_parser.add_argument(
     "--requested-by",
@@ -941,9 +877,6 @@ elif args.command == "release-workflow":
         args.token,
         args.repo,
         args.issue_number,
-        args.branch_repo,
-        args.branch_repo_token,
-        args.llvm_project_dir,
         args.requested_by,
     )
     if not release_workflow.release_branch_for_issue:
@@ -954,7 +887,5 @@ elif args.command == "release-workflow":
     else:
         if not release_workflow.execute_command():
             sys.exit(1)
-elif args.command == "setup-llvmbot-git":
-    setup_llvmbot_git()
 elif args.command == "request-release-note":
     request_release_note(args.token, args.repo, args.pr_number)

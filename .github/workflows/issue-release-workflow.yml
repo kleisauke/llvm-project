@@ -35,6 +35,7 @@ jobs:
     runs-on: ubuntu-24.04
     environment: main-branch-only
     permissions:
+      contents: write
       issues: write
       pull-requests: write
     if: >-
@@ -45,26 +46,21 @@ jobs:
       - name: Fetch LLVM sources
         uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
         with:
-          repository: llvm/llvm-project
-          # GitHub stores the token used for checkout and uses it for pushes
-          # too, but we want to use a different token for pushing, so we need
-          # to disable persist-credentials here.
-          persist-credentials: false
           fetch-depth: 0
 
       - name: Setup Environment
         run: |
           pip install --require-hashes -r ./llvm/utils/git/requirements.txt
-          ./llvm/utils/git/github-automation.py --token ${{ github.token }} setup-llvmbot-git
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
       - name: Backport Commits
         run: |
           printf "%s" "$COMMENT_BODY" |
           ./llvm/utils/git/github-automation.py \
           --repo "$GITHUB_REPOSITORY" \
-          --token "${{ secrets.RELEASE_WORKFLOW_PR_CREATE }}" \
+          --token "${{ secrets.GITHUB_TOKEN }}" \
           release-workflow \
-          --branch-repo-token ${{ secrets.RELEASE_WORKFLOW_PUSH_SECRET }} \
           --issue-number ${{ github.event.issue.number }} \
           --requested-by ${{ (github.event.action == 'opened' && github.event.issue.user.login) || github.event.comment.user.login }} \
           auto
