@@ -336,7 +336,6 @@ std::string WebAssemblyTargetCodeGenInfo::getRuntimeWrapperName(
 llvm::Value *WebAssemblyTargetCodeGenInfo::emitWasmRuntimeFunctionPointerBinding(
     CodeGenFunction &CGF, llvm::Value *FnPtr, QualType SrcType,
     QualType DstType, bool IsImmediate) const {
-
   const FunctionProtoType *SrcProto =
       SrcType->getPointeeType()->getAs<FunctionProtoType>();
   const FunctionProtoType *DstProto =
@@ -345,28 +344,9 @@ llvm::Value *WebAssemblyTargetCodeGenInfo::emitWasmRuntimeFunctionPointerBinding
   if (!SrcProto || !DstProto)
     return nullptr;
 
-  // Check parameter counts: source must have same or fewer params than destination
-  // We can add parameters (caller provides them, we ignore extras when calling source)
-  // We cannot remove parameters (caller doesn't provide them, we can't invent values)
-  unsigned SrcParams = SrcProto->getNumParams();
-  unsigned DstParams = DstProto->getNumParams();
-
-  if (SrcParams > DstParams)
-    return nullptr;  // Can't remove parameters
-
-  // Check return types: we can discard a return value but cannot invent one.
-  // Compare LLVM types (not C types) since wasm only cares about i32/i64/f32/f64.
-  QualType SrcRetTy = SrcProto->getReturnType();
-  QualType DstRetTy = DstProto->getReturnType();
-  llvm::Type *SrcRetLLVMTy = CGF.CGM.getTypes().ConvertType(SrcRetTy);
-  llvm::Type *DstRetLLVMTy = CGF.CGM.getTypes().ConvertType(DstRetTy);
-  bool sameReturnType = SrcRetLLVMTy == DstRetLLVMTy;
-
-  if (!DstRetTy->isVoidType() && !sameReturnType)
-    return nullptr;  // Can't invent return values
-
-  // Reject if signatures are identical (no adaptation needed)
-  if (SrcParams == DstParams && sameReturnType)
+  // Skip runtime binding if function types are already compatible
+  if (SrcProto->getNumParams() > DstProto->getNumParams() &&
+      SrcProto->isVariadic() == DstProto->isVariadic())
     return nullptr;
 
   // A null function pointer needs no wrapper — fall through to bitcast
@@ -374,8 +354,9 @@ llvm::Value *WebAssemblyTargetCodeGenInfo::emitWasmRuntimeFunctionPointerBinding
     return nullptr;
 
   LLVM_DEBUG(llvm::dbgs() << "emitWasmRuntimeFunctionPointerBinding: "
-                          << "src params=" << SrcParams
-                          << " dst params=" << DstParams << "\n");
+                          << "src params=" << SrcProto->getNumParams()
+                          << " dst params=" << DstProto->getNumParams()
+                          << "\n");
 
   llvm::Module &M = CGF.CGM.getModule();
   llvm::LLVMContext &Context = M.getContext();
@@ -440,24 +421,33 @@ llvm::Value *WebAssemblyTargetCodeGenInfo::emitWasmRuntimeFunctionPointerBinding
       llvm::BasicBlock *NullBB = llvm::BasicBlock::Create(Context, "nullslot", ImmediateWrapper);
       B.CreateCondBr(B.CreateIsNotNull(FP), CallBB, NullBB);
       B.SetInsertPoint(CallBB);
-      llvm::SmallVector<llvm::Value *, 8> ImmArgs;
-      auto AI = ImmediateWrapper->arg_begin();
-      for (unsigned J = 0; J < SrcParams && AI != ImmediateWrapper->arg_end(); ++J, ++AI) {
-        llvm::Value *A = &*AI;
-        if (A->getType() != SrcFnType->getParamType(J))
-          A = B.CreateBitOrPointerCast(A, SrcFnType->getParamType(J));
-        ImmArgs.push_back(A);
-      }
+      SmallVector<llvm::Value *, 4> ImmArgs;
+      llvm::Function::arg_iterator AI = ImmediateWrapper->arg_begin();
+      llvm::Function::arg_iterator AE = ImmediateWrapper->arg_end();
+      llvm::FunctionType::param_iterator PI = SrcFnType->param_begin();
+      llvm::FunctionType::param_iterator PE = SrcFnType->param_end();
+      for (; AI != AE && PI != PE; ++AI, ++PI)
+        ImmArgs.push_back(B.CreateAggregateCast(AI, *PI));
+      for (; PI != PE; ++PI)
+        ImmArgs.push_back(llvm::PoisonValue::get(*PI));
+      if (SrcFnType->isVarArg())
+        for (; AI != AE; ++AI)
+          ImmArgs.push_back(&*AI);
       llvm::CallInst *ImmCall = B.CreateCall(SrcFnType, FP, ImmArgs);
-      if (DstFnType->getReturnType()->isVoidTy()) {
-        B.CreateRetVoid(); B.SetInsertPoint(NullBB); B.CreateRetVoid();
+      llvm::Type *ExpectedRtnType = SrcFnType->getReturnType();
+      llvm::Type *RtnType = DstFnType->getReturnType();
+      if (RtnType->isVoidTy()) {
+        B.CreateRetVoid();
+      } else if (ExpectedRtnType->isVoidTy()) {
+        B.CreateRet(llvm::PoisonValue::get(RtnType));
       } else {
-        llvm::Value *R = ImmCall;
-        if (R->getType() != DstFnType->getReturnType())
-          R = B.CreateBitOrPointerCast(R, DstFnType->getReturnType());
-        B.CreateRet(R);
-        B.SetInsertPoint(NullBB);
-        B.CreateRet(llvm::Constant::getNullValue(DstFnType->getReturnType()));
+        B.CreateRet(B.CreateAggregateCast(ImmCall, RtnType));
+      }
+      B.SetInsertPoint(NullBB);
+      if (RtnType->isVoidTy()) {
+        B.CreateRetVoid();
+      } else {
+        B.CreateRet(llvm::PoisonValue::get(RtnType));
       }
     }
 
@@ -476,7 +466,7 @@ llvm::Value *WebAssemblyTargetCodeGenInfo::emitWasmRuntimeFunctionPointerBinding
         llvm::ConstantAggregateZero::get(CacheTy), PoolName + "_cache_wrappers");
 
     // Pre-generate POOL_SIZE wrapper functions + build lookup table
-    llvm::SmallVector<llvm::Constant *, 64> WrappersConst;
+    SmallVector<llvm::Constant *, 64> WrappersConst;
     for (unsigned I = 0; I < POOL_SIZE; ++I) {
       std::string InstName = WrapperName + "_" + std::to_string(I);
       llvm::Function *W = llvm::Function::Create(
@@ -497,29 +487,34 @@ llvm::Value *WebAssemblyTargetCodeGenInfo::emitWasmRuntimeFunctionPointerBinding
       B.CreateCondBr(IsNotNull, CallBB, NullBB);
 
       B.SetInsertPoint(CallBB);
-      llvm::SmallVector<llvm::Value *, 8> CallArgs;
-      auto ArgIt = W->arg_begin();
-      for (unsigned J = 0; J < SrcParams && ArgIt != W->arg_end(); ++J, ++ArgIt) {
-        llvm::Value *A = &*ArgIt;
-        if (A->getType() != SrcFnType->getParamType(J))
-          A = B.CreateBitOrPointerCast(A, SrcFnType->getParamType(J));
-        CallArgs.push_back(A);
-      }
+      SmallVector<llvm::Value *, 4> CallArgs;
+      llvm::Function::arg_iterator AI = W->arg_begin();
+      llvm::Function::arg_iterator AE = W->arg_end();
+      llvm::FunctionType::param_iterator PI = SrcFnType->param_begin();
+      llvm::FunctionType::param_iterator PE = SrcFnType->param_end();
+      for (; AI != AE && PI != PE; ++AI, ++PI)
+        CallArgs.push_back(B.CreateAggregateCast(AI, *PI));
+      for (; PI != PE; ++PI)
+        CallArgs.push_back(llvm::PoisonValue::get(*PI));
+      if (SrcFnType->isVarArg())
+        for (; AI != AE; ++AI)
+          CallArgs.push_back(&*AI);
       llvm::CallInst *Call = B.CreateCall(SrcFnType, FP, CallArgs);
-
-      if (DstFnType->getReturnType()->isVoidTy()) {
+      llvm::Type *ExpectedRtnType = SrcFnType->getReturnType();
+      llvm::Type *RtnType = DstFnType->getReturnType();
+      if (RtnType->isVoidTy()) {
         B.CreateRetVoid();
-        B.SetInsertPoint(NullBB);
+      } else if (ExpectedRtnType->isVoidTy()) {
+        B.CreateRet(llvm::PoisonValue::get(RtnType));
+      } else {
+        B.CreateRet(B.CreateAggregateCast(Call, RtnType));
+      }
+      B.SetInsertPoint(NullBB);
+      if (RtnType->isVoidTy()) {
         B.CreateRetVoid();
       } else {
-        llvm::Value *Ret = Call;
-        if (Ret->getType() != DstFnType->getReturnType())
-          Ret = B.CreateBitOrPointerCast(Ret, DstFnType->getReturnType());
-        B.CreateRet(Ret);
-        B.SetInsertPoint(NullBB);
-        B.CreateRet(llvm::Constant::getNullValue(DstFnType->getReturnType()));
+        B.CreateRet(llvm::PoisonValue::get(RtnType));
       }
-
       WrappersConst.push_back(llvm::ConstantExpr::getBitCast(W, PtrTy));
     }
 
